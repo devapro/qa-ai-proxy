@@ -1,7 +1,7 @@
 # Examples - a QA proxy setup laid out like a real repository
 
 Every file here sits at the path it would have in an Android project. Copy the parts you need;
-`../article.md` explains why each one exists.
+[My blog post](https://devapro.github.io/en/2026/10/07/ai-managed-server-states-qa-proxy/) explains why each one exists.
 
 ```
 examples/
