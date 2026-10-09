@@ -1,0 +1,47 @@
+# QA stack: an emulator, the agent container that drives it, and the QA proxy.
+# The proxy sits under the `qa-proxy` profile, so it starts only when targeted
+# (`./qa-proxy.sh docker-compose.yml emulator attach <scenarios>` or `--profile qa-proxy up`).
+
+name: qa
+
+services:
+  emulator:
+    image: budtmo/docker-android:emulator_14.0   # any headless emulator image with adb on :5555
+    privileged: true
+    environment:
+      EMULATOR_DEVICE: "Nexus 5"
+      WEB_VNC: "false"
+    expose:
+      - "5555"
+
+  agent:
+    # The container Claude Code (or any test runner) runs in. It reaches the emulator over adb
+    # and the proxy's control API over the compose network.
+    build: ./agent
+    depends_on:
+      emulator:
+        condition: service_started
+    environment:
+      ADB_SERVER_SOCKET: tcp:emulator:5555
+      QA_PROXY_URL: http://qa-proxy:8090
+    volumes:
+      - ..:/workspace
+
+  qa-proxy:
+    build:
+      context: ../qa-proxy
+    profiles: ["qa-proxy"]
+    environment:
+      QA_PROXY_ACTIVE: "${QA_PROXY_ACTIVE:-}"
+      QA_PROXY_INSECURE_UPSTREAM: "${QA_PROXY_INSECURE_UPSTREAM:-false}"
+    volumes:
+      # Mounted over the baked-in copy so a scenario written during the run is picked up by
+      # POST /scenarios/reload (or the next start) without rebuilding the image.
+      - ../qa-proxy/scenarios:/opt/qa-proxy/scenarios:ro
+      # Only when the app pins the proxy CA (network_security_config option A): a stable CA,
+      # provisioned by CI from a secret. Without it the proxy generates a fresh CA per container.
+      # - ${QA_PROXY_CA_DIR:-./.qa-proxy-ca}:/var/lib/qa-proxy/ca
+    # The control API (:8090) is unauthenticated: compose network only, never a `ports:` mapping.
+    expose:
+      - "8080"
+      - "8090"

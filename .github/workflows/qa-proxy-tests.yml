@@ -1,0 +1,36 @@
+# Unit and end-to-end tests of the QA proxy and every scenario in it, plus the spec
+# checker the QA skills run against it. Runs against local HTTPS/WebSocket upstreams
+# only - no emulator, no network - so it is a plain hosted-runner job.
+
+name: QA proxy tests
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'qa-proxy/**'
+      - '.claude/skills/qa-proxy-prepare/scripts/**'
+      - '.github/workflows/qa-proxy-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: qa-proxy
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: qa-proxy/package-lock.json
+      - run: npm ci
+      - run: npm audit --omit=dev --audit-level=high
+      - run: npm test
+      - name: check_proxy_specs tests
+        run: node --test ../.claude/skills/qa-proxy-prepare/scripts/check_proxy_specs.test.mjs

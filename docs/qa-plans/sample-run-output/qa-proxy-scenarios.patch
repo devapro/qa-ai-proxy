@@ -1,0 +1,94 @@
+diff --git a/qa-proxy/scenarios/assistant-chat-status.js b/qa-proxy/scenarios/assistant-chat-status.js
+new file mode 100644
+index 0000000..9b3072b
+--- /dev/null
++++ b/qa-proxy/scenarios/assistant-chat-status.js
+@@ -0,0 +1,24 @@
++export default {
++    name: 'assistant-chat-status',
++    description:
++        'Makes sending an assistant chat message fail: POST /assistant/v1/chat is answered by the proxy with HTTP ' +
++        '`status` (default 500) and {"detail": "qa-proxy assistant-chat-status"}, without contacting the server. ' +
++        '402 opens the paywall, 5xx shows the inline "Couldn\'t send" error. Every other request stays real. ' +
++        'The app also needs a signed-in user with credits available, or it never sends the message.',
++    params: {
++        status: 500,
++    },
++    http: [
++        {
++            method: 'POST',
++            path: '/assistant/v1/chat',
++            onRequest(_, { params }) {
++                const status = Number(params.status);
++                if (!Number.isInteger(status) || status < 400 || status > 599) {
++                    throw new Error(`status must be an HTTP error code (400-599), got ${JSON.stringify(params.status)}`);
++                }
++                return { respond: { status, json: { detail: 'qa-proxy assistant-chat-status' } } };
++            },
++        },
++    ],
++};
+diff --git a/qa-proxy/test/scenarios/assistant-chat-status.test.js b/qa-proxy/test/scenarios/assistant-chat-status.test.js
+new file mode 100644
+index 0000000..5697de4
+--- /dev/null
++++ b/qa-proxy/test/scenarios/assistant-chat-status.test.js
+@@ -0,0 +1,58 @@
++import assert from 'node:assert/strict';
++import { after, before, describe, test } from 'node:test';
++import scenario from '../../scenarios/assistant-chat-status.js';
++import { httpsThroughProxy, startHttpsUpstream, startTestProxy } from '../support.js';
++
++const CHAT_PATH = '/assistant/v1/chat';
++const onRequest = scenario.http[0].onRequest;
++
++describe('assistant-chat-status hook', () => {
++    test('answers with the default status without a body from upstream', () => {
++        assert.deepEqual(onRequest({}, { params: scenario.params }), {
++            respond: { status: 500, json: { detail: 'qa-proxy assistant-chat-status' } },
++        });
++    });
++
++    test('honours the status param, as a number or a string', () => {
++        assert.equal(onRequest({}, { params: { status: 402 } }).respond.status, 402);
++        assert.equal(onRequest({}, { params: { status: '402' } }).respond.status, 402);
++    });
++
++    test('rejects a status that is not an HTTP error code', () => {
++        assert.throws(() => onRequest({}, { params: { status: 200 } }), /HTTP error code/);
++        assert.throws(() => onRequest({}, { params: { status: 'paywall' } }), /HTTP error code/);
++    });
++});
++
++describe('assistant-chat-status through the proxy', () => {
++    let upstream;
++    let proxy;
++    let serverHits = 0;
++
++    before(async () => {
++        upstream = await startHttpsUpstream(async (server) => {
++            await server.forPost(CHAT_PATH).thenCallback(() => {
++                serverHits++;
++                return { statusCode: 200, json: { reply: 'real' } };
++            });
++        });
++        proxy = await startTestProxy();
++    });
++
++    after(async () => {
++        await proxy.stop();
++        await upstream.stop();
++    });
++
++    test('answers 402 without reaching the server and logs the rewrite', async () => {
++        await proxy.control('PUT', '/active', [{ name: 'assistant-chat-status', params: { status: 402 } }]);
++        await proxy.control('DELETE', '/log');
++
++        const response = await httpsThroughProxy(proxy, `https://localhost:${upstream.port}${CHAT_PATH}`, { method: 'POST', body: { text: 'hi' } });
++        const log = await proxy.control('GET', '/log?modified=true');
++
++        assert.equal(response.status, 402);
++        assert.equal(serverHits, 0);
++        assert.deepEqual(log.json[0].modifiedBy, ['assistant-chat-status']);
++    });
++});

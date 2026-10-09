@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug build only (src/debug/res overrides src/main/res).
+  Lets the app's own HTTPS clients trust the QA proxy's CA without trusting it in release.
+
+  Option A (shown): trust the proxy CA bundled as a raw resource. Generate the CA once
+  (qa-proxy keeps it in QA_PROXY_CA_DIR), commit ONLY the public certificate as
+  src/debug/res/raw/qa_proxy_ca.pem, and keep the private key out of the repo (CI secret /
+  persistent volume). Every proxy instance must then start with that same CA.
+
+  Option B: trust user-installed CAs (<certificates src="user" />) and install
+  GET /ca.pem on the device. Works, but needs a manual step per device.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <debug-overrides>
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="@raw/qa_proxy_ca" />
+        </trust-anchors>
+    </debug-overrides>
+</network-security-config>

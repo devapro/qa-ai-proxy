@@ -1,0 +1,21 @@
+{
+  "name": "qa-proxy",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Scriptable MITM proxy that rewrites real backend HTTP responses and WebSocket frames for QA on the Android emulator.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test --test-timeout=20000 \"test/**/*.test.js\""
+  },
+  "dependencies": {
+    "mockttp": "4.6.3",
+    "ws": "8.21.3"
+  },
+  "devDependencies": {
+    "https-proxy-agent": "7.0.6"
+  }
+}

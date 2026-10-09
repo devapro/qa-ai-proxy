@@ -1,0 +1,12 @@
+{
+  "written": [
+    {
+      "name": "assistant-chat-status",
+      "params": { "status": 500 },
+      "endpoint": "POST /assistant/v1/chat",
+      "cases": ["TC-4", "TC-5"]
+    }
+  ],
+  "extended": [],
+  "unresolved": []
+}

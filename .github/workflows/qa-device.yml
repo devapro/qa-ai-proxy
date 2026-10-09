@@ -1,0 +1,102 @@
+# AI device QA of a test plan, with server-driven states arranged by the QA proxy.
+#
+#   1. Prepare  - a Claude step with NO device writes the scenarios the plan needs that do
+#                 not exist yet (/qa-proxy-prepare), verifies them with npm test, and leaves
+#                 a resolved plan + manifest + patch. Nothing is committed.
+#   2. Proxy    - the proxy starts AFTER preparation, so its registry loads the new files.
+#                 If it refuses to start with them, they are discarded and the cases that
+#                 needed them become BLOCKED - never a run against real data.
+#   3. Run      - /qa-device executes the resolved plan on the emulator, case by case.
+#   4. Publish  - the report, plus scenarios.json and the patch for a developer to review.
+
+name: QA device
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_plan:
+        description: Path to the test plan in the repo (Markdown)
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  qa:
+    runs-on: [self-hosted, android-emulator]
+    timeout-minutes: 120
+    env:
+      COMPOSE: docker compose -f docker/docker-compose.yml
+      PREPARE_OUT: .qa-proxy-prepare
+      TEST_PLAN_PATH: ${{ inputs.test_plan }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start emulator and install the debug app
+        run: |
+          $COMPOSE up -d emulator
+          ./docker/wait-for-emulator.sh
+          ./gradlew assembleDebug
+          $COMPOSE exec -T emulator adb install -r /workspace/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Prepare QA-proxy scenarios
+        id: prepare
+        # A failed preparation degrades to BLOCKED cases, never to no run at all.
+        continue-on-error: true
+        timeout-minutes: 20
+        run: |
+          rm -rf "$PREPARE_OUT" && mkdir -p "$PREPARE_OUT"
+          PROMPT="$(envsubst < .github/prompts/qa-proxy-prepare.md)"
+          $COMPOSE run --rm -T agent claude -p "$PROMPT" --dangerously-skip-permissions || true
+          STATUS="$(tr -d '[:space:]' < "$PREPARE_OUT/status.txt" 2>/dev/null || echo MISSING)"
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          case "$STATUS" in
+            READY|PARTIAL) ;;
+            *)  # nothing verified: drop half-written files so they cannot break the proxy
+                git checkout -- qa-proxy/ && git clean -fdq -- qa-proxy/ ;;
+          esac
+          if [ -s "$PREPARE_OUT/qa_test_plan.resolved.md" ]; then
+            echo "TEST_PLAN_PATH=$PREPARE_OUT/qa_test_plan.resolved.md" >> "$GITHUB_ENV"
+          fi
+
+      - name: Start QA proxy
+        # Started for every run: an idle proxy costs nothing - the app routes through it
+        # only when a case launches it with the address.
+        run: |
+          up() { $COMPOSE --profile qa-proxy up -d --build --wait qa-proxy; }
+          up && exit 0
+          echo "::warning::The proxy did not start with the generated scenarios - discarding them."
+          git checkout -- qa-proxy/ && git clean -fdq -- qa-proxy/
+          if [ -s "$PREPARE_OUT/scenarios.json" ]; then
+            jq '.unresolved += [(.written + .extended)[] | {need: .name, cases, reason: "broke the proxy startup; discarded"}]
+                | .written = [] | .extended = []' "$PREPARE_OUT/scenarios.json" > manifest.tmp \
+              && mv manifest.tmp "$PREPARE_OUT/scenarios.json"
+          fi
+          up
+
+      - name: Run the test plan
+        run: |
+          $COMPOSE run --rm -T agent claude -p \
+            "/qa-device $TEST_PLAN_PATH --scenarios-manifest $PREPARE_OUT/scenarios.json (CI: no human; never ask questions)" \
+            --dangerously-skip-permissions
+
+      - name: Collect report
+        if: always()
+        run: |
+          REPORT_DIR="$(ls -dt qa-reports/*/ 2>/dev/null | head -1)"
+          [ -n "$REPORT_DIR" ] || exit 0
+          for f in scenarios.json qa-proxy-scenarios.patch; do
+            [ -s "$PREPARE_OUT/$f" ] && cp "$PREPARE_OUT/$f" "$REPORT_DIR/"
+          done
+          ./docker/qa-proxy.sh docker/docker-compose.yml emulator log > "$REPORT_DIR/qa-proxy-log.json" || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qa-report-${{ github.run_id }}
+          path: qa-reports/
+
+      - name: Cleanup
+        if: always()
+        run: $COMPOSE --profile qa-proxy down || true
